@@ -1,0 +1,105 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function hasRole(data, role) {
+      return data.acl[request.auth.uid] == role;
+    }
+
+    function hasAnyRole(data) {
+      return signedIn() && data.memberIds.hasAny([request.auth.uid]);
+    }
+
+    function canEdit(data) {
+      return signedIn() && (
+        data.acl[request.auth.uid] == 'owner' ||
+        data.acl[request.auth.uid] == 'admin' ||
+        data.acl[request.auth.uid] == 'editor'
+      );
+    }
+
+    match /users/{uid} {
+      allow read: if signedIn() && request.auth.uid == uid;
+      allow create, update: if signedIn() && request.auth.uid == uid;
+      allow delete: if false;
+
+      match /private/{docId} {
+        allow read, write: if signedIn() && request.auth.uid == uid;
+      }
+
+      match /{document=**} {
+        allow read, write: if signedIn() && request.auth.uid == uid;
+      }
+    }
+
+    match /documents/{docId} {
+      allow create: if signedIn() &&
+        request.resource.data.ownerId == request.auth.uid &&
+        request.resource.data.memberIds.hasAny([request.auth.uid]);
+
+      allow read: if hasAnyRole(resource.data);
+      allow update: if canEdit(resource.data);
+      allow delete: if hasRole(resource.data, 'owner');
+
+      match /ops/{opId} {
+        allow read: if hasAnyRole(get(/databases/$(database)/documents/documents/$(docId)).data);
+        allow create: if canEdit(get(/databases/$(database)/documents/documents/$(docId)).data);
+        allow update, delete: if false;
+      }
+    }
+
+    match /channels/{channelId} {
+      allow create: if signedIn() && request.resource.data.memberIds.hasAny([request.auth.uid]);
+      allow read: if hasAnyRole(resource.data);
+      allow update: if canEdit(resource.data);
+      allow delete: if hasRole(resource.data, 'owner') || hasRole(resource.data, 'admin');
+
+      match /messages/{messageId} {
+        allow read: if hasAnyRole(get(/databases/$(database)/documents/channels/$(channelId)).data);
+        allow create: if canEdit(get(/databases/$(database)/documents/channels/$(channelId)).data);
+        allow update, delete: if false;
+      }
+    }
+
+    match /files/{fileId} {
+      allow create: if signedIn() && request.resource.data.ownerId == request.auth.uid;
+      allow read: if hasAnyRole(resource.data);
+      allow update: if signedIn() && (
+        resource.data.ownerId == request.auth.uid ||
+        resource.data.acl[request.auth.uid] == 'owner' ||
+        resource.data.acl[request.auth.uid] == 'admin'
+      );
+      allow delete: if signedIn() && resource.data.ownerId == request.auth.uid;
+    }
+
+    match /aiRequests/{requestId} {
+      allow create: if signedIn() && request.resource.data.ownerId == request.auth.uid;
+      allow read: if signedIn() && resource.data.ownerId == request.auth.uid;
+      allow update, delete: if false;
+    }
+
+    match /aiOutputs/{outputId} {
+      allow create: if signedIn() && request.resource.data.ownerId == request.auth.uid;
+      allow read: if signedIn() && resource.data.ownerId == request.auth.uid;
+      allow update, delete: if false;
+    }
+
+    match /notifications/{uid}/items/{notifId} {
+      allow read: if signedIn() && request.auth.uid == uid;
+      allow create: if signedIn() && request.auth.uid == uid;
+      allow update: if signedIn() && request.auth.uid == uid;
+      allow delete: if signedIn() && request.auth.uid == uid;
+    }
+
+    match /adminMetrics/{metricId} {
+      allow read: if signedIn() && (
+        request.auth.token.admin == true ||
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin'
+      );
+      allow write: if false;
+    }
+  }
+}
